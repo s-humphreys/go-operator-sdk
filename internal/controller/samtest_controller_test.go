@@ -51,7 +51,9 @@ var _ = Describe("Samtest Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: cachev1alpha1.SamtestSpec{
+						Image: "nginx:latest",
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}

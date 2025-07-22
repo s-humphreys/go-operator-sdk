@@ -1,0 +1,9 @@
+apiVersion: cache.k8s.capitalontap.com/v1alpha1
+kind: Samtest
+metadata:
+  labels:
+    app.kubernetes.io/name: go-operator-sdk
+    app.kubernetes.io/managed-by: kustomize
+  name: samtest-sample
+spec:
+  # TODO(user): Add fields here

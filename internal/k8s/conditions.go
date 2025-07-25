@@ -16,42 +16,44 @@ type Condition struct {
 const (
 	ConditionReady ConditionType = iota
 	ConditionProgressing
+	ConditionFailed
 )
 
 const (
-	ResourcesCreated ConditionReason = iota
-	ResourcesReconciled
-	ResourcesOutOfSync
+	ResourcesReady ConditionReason = iota
+	ProgressingResources
+	ResourcesFailed
 )
 
 var ConditionTypeMap = map[ConditionType]string{
 	ConditionReady:       "Ready",
 	ConditionProgressing: "Progressing",
+	ConditionFailed:      "Failed",
 }
 
 var conditionReasonMap = map[ConditionReason]Condition{
-	ResourcesCreated: {
+	ResourcesReady: {
 		conditionType: ConditionReady,
-		reason:        "ResourcesCreated",
-		message:       "Resources have been created successfully",
+		reason:        "ResourcesReady",
+		message:       "Recources all ready and in desired state",
 	},
-	ResourcesReconciled: {
-		conditionType: ConditionReady,
-		reason:        "ResourcesReconciled",
-		message:       "Recources have been reconciled successfully",
-	},
-	ResourcesOutOfSync: {
+	ProgressingResources: {
 		conditionType: ConditionProgressing,
-		reason:        "ResourcesOutOfSync",
-		message:       "At least one resource is out of sync with the desired state",
+		reason:        "ProgressingResources",
+		message:       "Progressing resources to sync with the desired state",
+	},
+	ResourcesFailed: {
+		conditionType: ConditionFailed,
+		reason:        "ResourcesFailed",
+		message:       "Failed to provision resources",
 	},
 }
 
 // Creates a condition status for the CRD using a provided ConditionReason.
 // This allows for a consistent way to create conditions based on predefined reasons
 // across CRDs.
-func NewStatusCondition(reason ConditionReason) *metav1.Condition {
-	return &metav1.Condition{
+func NewStatusCondition(reason ConditionReason) metav1.Condition {
+	return metav1.Condition{
 		Type:    ConditionTypeMap[conditionReasonMap[reason].conditionType],
 		Status:  metav1.ConditionTrue,
 		Reason:  conditionReasonMap[reason].reason,

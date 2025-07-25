@@ -1,93 +1,82 @@
 package resources
 
 import (
-	"fmt"
-
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	cachev1alpha1 "github.com/s-humphreys/go-operator-sdk/api/v1alpha1"
 	"github.com/s-humphreys/go-operator-sdk/internal/k8s"
 )
-
-type DeploymentEvents struct {
-	Created        k8s.Event
-	Updated        k8s.Event
-	ImageOutOfSync k8s.Event
-}
-
-// NewDeploymentEvents returns a new DeploymentEvents struct with default values.
-func NewDeploymentEvents(name string) DeploymentEvents {
-	return DeploymentEvents{
-		Created: k8s.Event{
-			EventType: k8s.EventTypeNormal,
-			Reason:    "DeploymentCreated",
-			Message:   fmt.Sprintf("The Deployment '%s' has been created successfully", name),
-		},
-		Updated: k8s.Event{
-			EventType: k8s.EventTypeNormal,
-			Reason:    "DeploymentUpdated",
-			Message:   fmt.Sprintf("The Deployment '%s' has been updated successfully", name),
-		},
-		ImageOutOfSync: k8s.Event{
-			EventType: k8s.EventTypeWarning,
-			Reason:    "DeploymentImageOutOfSync",
-			Message:   fmt.Sprintf("The Deployment '%s' image is being updated to match the spec", name),
-		},
-	}
-}
 
 type Deployment struct {
 	Name      string
 	Namespace string
 	Image     string
-	Events    DeploymentEvents
+	Labels    k8s.Labels
 }
 
-// New creates a new Deployment with default events.
-func NewDeployment(name, namespace, image string) *Deployment {
+// New creates a new Deployment with default values
+func (d *Deployment) New(crd *cachev1alpha1.Samtest) Resource {
 	return &Deployment{
-		Name:      name,
-		Namespace: namespace,
-		Image:     image,
-		Events:    NewDeploymentEvents(name),
+		Name:      crd.Name,
+		Namespace: crd.Namespace,
+		Image:     crd.Spec.Image,
+		Labels:    k8s.CreateLabels(crd.Name),
 	}
 }
 
-// Creates default labels for the Deployment.
-func (d *Deployment) generateLabels() k8s.Labels {
-	return k8s.Labels{
-		"app": d.Name,
-	}
+// Returns the resource kind.
+func (d *Deployment) Kind() string {
+	return "Deployment"
 }
 
 // Creates a new Deployment Kubernetes object.
-func (d *Deployment) Generate() *appsv1.Deployment {
-	labels := d.generateLabels()
-
+func (d *Deployment) Generate() client.Object {
 	return &appsv1.Deployment{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "apps/v1",
+			Kind:       d.Kind(),
+		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      d.Name,
 			Namespace: d.Namespace,
-			Labels:    labels,
+			Labels:    d.Labels,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Selector: &metav1.LabelSelector{
-				MatchLabels: labels,
+				MatchLabels: d.Labels,
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
+					Labels: d.Labels,
 				},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
 						{
 							Name:  "main",
 							Image: d.Image,
+							Ports: []corev1.ContainerPort{
+								{
+									Name:          "http",
+									ContainerPort: 80,
+								},
+							},
 						},
 					},
 				},
 			},
 		},
 	}
+}
+
+func (d *Deployment) IsEqual(found client.Object) bool {
+	foundDeployment, ok := found.(*appsv1.Deployment)
+	if !ok {
+		return false
+	}
+
+	return equality.Semantic.DeepEqual(d.Generate().(*appsv1.Deployment).Spec, foundDeployment.Spec)
 }

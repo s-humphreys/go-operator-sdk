@@ -7,4 +7,5 @@ metadata:
   name: nginx
   namespace: helloworld
 spec:
-  image: "nginx:latest"
+  # suspend: true
+  image: nginx:1.0.1

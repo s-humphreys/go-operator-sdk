@@ -27,7 +27,16 @@ import (
 type SamtestSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
-	Image string `json:"image,omitempty"`
+
+	// +kubebuilder:default:=false
+	Suspend bool `json:"suspend,omitempty"`
+
+	// +kubebuilder:validation:Pattern=`^(.*):(.*)$`
+	// +kubebuilder:validation:Required
+	Image string `json:"image"`
+
+	// +kubebuilder:validation:Required
+	Repliacas int `json:"replicas"`
 }
 
 // SamtestStatus defines the observed state of Samtest.

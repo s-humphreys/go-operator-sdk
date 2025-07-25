@@ -18,9 +18,10 @@ package controller
 
 import (
 	"context"
+	"sync"
 
 	appsv1 "k8s.io/api/apps/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -46,6 +47,7 @@ type SamtestReconciler struct {
 // +kubebuilder:rbac:groups=cache.k8s.capitalontap.com,resources=samtests/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -64,59 +66,50 @@ func (r *SamtestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	deploy := resources.NewDeployment(samtest.Name, samtest.Namespace, samtest.Spec.Image)
-	deployObj := deploy.Generate()
-	err := r.Get(ctx, client.ObjectKeyFromObject(deployObj), deployObj)
+	if samtest.Spec.Suspend {
+		log.Info("resource is suspended, skipping reconciliation")
+		return ctrl.Result{}, nil
+	}
 
-	// Deployment not found, create it
-	if errors.IsNotFound(err) {
-		// Set the owner references
-		if err := ctrl.SetControllerReference(samtest, deployObj, r.Scheme); err != nil {
-			log.Error(err, "failed to set controller reference")
-			return ctrl.Result{}, err
-		}
+	managedResources := []resources.Resource{
+		&resources.Deployment{},
+		&resources.Service{},
+	}
 
-		// Create the deployment
-		if err := r.Create(ctx, deployObj); err != nil {
-			log.Error(err, "failed to create deployment")
-			return ctrl.Result{}, err
-		}
+	// TODO(Sam) - determine if there is a diff (do in prior loop, early return & update status)
 
-		k8s.NewEvent(samtest, r.Recorder, deploy.Events.Created)
-		log.Info("created deployment", "name", deployObj.Name, "namespace", deployObj.Namespace)
-
-		if err := r.updateStatus(ctx, samtest, *k8s.NewStatusCondition(k8s.ResourcesCreated)); err != nil {
-			return ctrl.Result{}, err
-		}
-	} else if err != nil {
+	if err := r.updateStatus(ctx, samtest, k8s.NewStatusCondition(k8s.ProgressingResources)); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// Handle changes to existing Deployment
-	image := ""
-	if len(deployObj.Spec.Template.Spec.Containers) > 0 {
-		image = deployObj.Spec.Template.Spec.Containers[0].Image
+	// Reconcile each resource
+	var wg sync.WaitGroup
+	errs := make(chan error, len(managedResources))
+
+	for _, resource := range managedResources {
+		res := resource.New(samtest)
+		wg.Add(1)
+
+		go func(reconcileResource resources.Resource) {
+			defer wg.Done()
+			if _, err := r.reconcileResource(log, ctx, samtest, reconcileResource); err != nil {
+				errs <- err
+			}
+		}(res)
 	}
 
-	// Check if the image is out of sync & update if necessary
-	if image != samtest.Spec.Image {
-		log.Info("deployment image is out of sync, updating", "current", image, "desired", samtest.Spec.Image)
-		k8s.NewEvent(samtest, r.Recorder, deploy.Events.ImageOutOfSync)
+	wg.Wait()
+	close(errs)
 
-		if err := r.updateStatus(ctx, samtest, *k8s.NewStatusCondition(k8s.ResourcesOutOfSync)); err != nil {
+	for err := range errs {
+		if err != nil {
+			_ = r.updateStatus(ctx, samtest, k8s.NewStatusCondition(k8s.ResourcesFailed))
 			return ctrl.Result{}, err
 		}
+	}
 
-		deployObj.Spec.Template.Spec.Containers[0].Image = samtest.Spec.Image
-		if err := r.Update(ctx, deployObj); err != nil {
-			log.Error(err, "failed to update deployment image")
-			return ctrl.Result{}, err
-		}
-
-		k8s.NewEvent(samtest, r.Recorder, deploy.Events.Updated)
-		if err := r.updateStatus(ctx, samtest, *k8s.NewStatusCondition(k8s.ResourcesReconciled)); err != nil {
-			return ctrl.Result{}, err
-		}
+	if err := r.updateStatus(ctx, samtest, k8s.NewStatusCondition(k8s.ResourcesReady)); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
@@ -127,16 +120,17 @@ func (r *SamtestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cachev1alpha1.Samtest{}).
 		Owns(&appsv1.Deployment{}).
+		Owns(&corev1.Service{}).
 		Named("samtest").
 		Complete(r)
 }
 
-// Updates the status of the Samtest resource with a provided condition
+// Updates the status of the Samtest resource with a provided condition.
 func (r *SamtestReconciler) updateStatus(ctx context.Context, samtest *cachev1alpha1.Samtest, condition metav1.Condition) error {
 	log := logf.FromContext(ctx)
 	meta.SetStatusCondition(&samtest.Status.Conditions, condition)
 	if err := r.Status().Update(ctx, samtest); err != nil {
-		log.Error(err, "failed to update samtest status", "conditionType", condition.Type, "conditionStatus", condition.Status)
+		log.Error(err, "failed to update status", "conditionType", condition.Type, "conditionStatus", condition.Status)
 		return err
 	}
 	return nil
